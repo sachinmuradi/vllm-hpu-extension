@@ -28,6 +28,14 @@ except ImportError:
     logger.warning("Could not import HPU FusedSDPA kernel. "
                    "vLLM will use native implementation.")
 
+HPUCustomPA = None
+try:
+    from habana_frameworks.torch.hpex.kernels import CustomPA
+    HPUCustomPA = CustomPA
+except ImportError:
+    logger.warning("Could not import HPU CustomPA kernel. "
+                   "vLLM will use native implementation.")
+
 
 def batch2block(tensor, block_mapping):
     shape = tuple(tensor.shape)
@@ -61,34 +69,38 @@ def block_softmax(batch_size, attn, block_mapping):
     return attn
 
 
-def flat_pa(query, key_cache, value_cache, block_list, block_mapping,
+def flat_pa(query, key_cache, value_cache, block_list, block_mapping, block_indices, block_offsets,
             block_bias, scale, matmul_qk_op, matmul_av_op, keys_fetch_func,
             values_fetch_func):
     batch_size = query.size(0)
     q_heads = query.size(1)
     kv_heads = key_cache.size(2)
 
-    query = batch2block(scale * query, block_mapping).unsqueeze(-2)
-    key = keys_fetch_func(key_cache, block_list).transpose(1, 2)
-    value = values_fetch_func(value_cache, block_list).transpose(1, 2)
-    block_bias = block_bias.view(key.size(0), 1, 1, -1)
-
-    if kv_heads != q_heads:
-        block_bias = block_bias.unsqueeze(1)
-        query = query.unflatten(1, (kv_heads, -1))
-        key = key.unflatten(1, (kv_heads, 1))
-        value = value.unflatten(1, (kv_heads, 1))
-        key = key.transpose(3, 4)
+    if HPUCustomPA is not None:
+        attn = CustomPA.apply(query, key_cache, value_cache, block_list, block_mapping, block_indices, block_offsets, scale)
     else:
-        key = key.transpose(2, 3)
+        query = batch2block(scale * query, block_mapping).unsqueeze(-2)
+        key = keys_fetch_func(key_cache, block_list).transpose(1, 2)
+        value = values_fetch_func(value_cache, block_list).transpose(1, 2)
+        block_bias = block_bias.view(key.size(0), 1, 1, -1)
 
-    attn = matmul_qk_op(query, key) + block_bias
-    attn = block_softmax(batch_size, attn, block_mapping)
-    attn = matmul_av_op(attn, value)
-    attn = block2batch(attn, block_mapping)
-    attn = attn.squeeze(-2)
-    if kv_heads != q_heads:
-        attn = attn.flatten(1, 2)
+        if kv_heads != q_heads:
+            block_bias = block_bias.unsqueeze(1)
+            query = query.unflatten(1, (kv_heads, -1))
+            key = key.unflatten(1, (kv_heads, 1))
+            value = value.unflatten(1, (kv_heads, 1))
+            key = key.transpose(3, 4)
+        else:
+            key = key.transpose(2, 3)
+        
+        attn = matmul_qk_op(query, key) + block_bias
+        attn = block_softmax(batch_size, attn, block_mapping)
+        attn = matmul_av_op(attn, value)
+        attn = block2batch(attn, block_mapping)
+        attn = attn.squeeze(-2)
+        if kv_heads != q_heads:
+            attn = attn.flatten(1, 2)
+
     return attn
 
 
