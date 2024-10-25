@@ -36,6 +36,8 @@ except ImportError:
     logger.warning("Could not import HPU CustomPA kernel. "
                    "vLLM will use native implementation.")
 
+def is_custom_pa_enabled():
+    return HPUCustomPA is not None
 
 def batch2block(tensor, block_mapping):
     shape = tuple(tensor.shape)
