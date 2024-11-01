@@ -147,13 +147,13 @@ def block_softmax(batch_size, attn, block_mapping, block_scales, block_groups):
 
 def flat_pa(query, key, key_cache, value_cache, block_list, block_mapping, block_indices, block_offsets,
             block_bias, block_scales, block_groups, scale, matmul_qk_op, matmul_av_op, keys_fetch_func,
-            values_fetch_func):
+            values_fetch_func, is_contiguous_pa):
     batch_size = query.size(0)
     q_heads = query.size(1)
     kv_heads = key_cache.size(2)
 
-    if HPUCustomPA is not None:
-        # Here we should have ke_cache transposed to (num_block, head_dim, num_heads, block_Size)
+    if (HPUCustomPA is not None) and (not is_contiguous_pa):
+        # Here we should have key_cache transposed to (num_block, head_dim, num_heads, block_Size)
         attn = CustomPA.apply(query, key, key_cache, value_cache, block_list, block_mapping, block_indices, block_offsets, scale)
     else:
         query = batch2block(scale * query, block_mapping).unsqueeze(-2)
