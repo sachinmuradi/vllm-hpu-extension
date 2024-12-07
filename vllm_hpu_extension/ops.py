@@ -39,7 +39,12 @@ except ImportError:
                    "vLLM will use native implementation.")
 
 def is_custom_pa_enabled():
-    return HPUCustomPA is not None
+    is_enabled = os.environ.get('VLLM_CUSTOM_PA','false').lower() == 'true'
+    return is_enabled
+def is_custom_pa_store_key():
+    is_store_key_enabled = os.environ.get('VLLM_CUSTOM_PA_STORE_KEY','false').lower() == 'true'
+    return  is_store_key_enabled
+
 
 class SoftmaxNormalization:
 
@@ -144,17 +149,33 @@ def block_softmax(batch_size, attn, block_mapping, block_scales, block_groups):
     attn.div_(sums)
     return attn
 
+def custom_store_key(key_cache, key, block_indices, block_offsets):
+    return torch.ops.hpu.storekey_fwd_(key_cache, key, block_indices, block_offsets)
 
 def flat_pa(query, key, key_cache, value_cache, block_list, block_mapping, block_indices, block_offsets,
             block_bias, block_scales, block_groups, scale, matmul_qk_op, matmul_av_op, keys_fetch_func,
             values_fetch_func, is_contiguous_pa):
+    
     batch_size = query.size(0)
     q_heads = query.size(1)
     kv_heads = key_cache.size(2)
 
-    if (HPUCustomPA is not None) and (not is_contiguous_pa):
+    if is_custom_pa_enabled() and (not is_contiguous_pa):
         # Here we should have key_cache transposed to (num_block, head_dim, num_heads, block_Size)
-        attn = CustomPA.apply(query, key, key_cache, value_cache, block_list, block_mapping, block_indices, block_offsets, scale)
+        use_separate_qk = os.environ.get('VLLM_CUSTOM_PA_SEPARATE_QK','false').lower() == 'true'
+        if use_separate_qk:
+            print("Using separate QK and AV kernels")
+            attn_scores = torch.ops.hpu.custom_pa_qk_sfmx_fwd(query, key, key_cache, block_list, block_mapping, block_indices, block_offsets, scale)
+            attn = torch.ops.hpu.custom_pa_av_fwd(attn_scores, value_cache, block_list, block_mapping, block_indices, block_offsets)
+        else:
+            if is_custom_pa_store_key():
+                # Key cache is updated in separate kernel
+                # calculate paged attn
+                print("Key stored spearately , now custom pa")
+                attn = torch.ops.hpu.custom_pa_v1_fwd(query, key_cache, value_cache, block_list, block_mapping, block_indices, block_offsets, scale)
+            else:
+                print("NOT using 2 kernels approach")
+                attn = CustomPA.apply(query, key, key_cache, value_cache, block_list, block_mapping, block_indices, block_offsets, scale)
     else:
         query = batch2block(scale * query, block_mapping).unsqueeze(-2)
         key = keys_fetch_func(key_cache, block_list).transpose(1, 2)
