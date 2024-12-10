@@ -182,7 +182,7 @@ def flat_pa(query, key, key_cache, value_cache, block_list, block_mapping, block
                 key_cache = key_cache.permute(0, 3, 2, 1).contiguous()
     else:
         query = batch2block(scale * query, block_mapping).unsqueeze(-2)
-        key = keys_fetch_func(key_cache, block_list).transpose(1, 2)
+        key = keys_fetch_func(key_cache, block_list, is_custom_pa_store_key()).transpose(1, 2)
         value = values_fetch_func(value_cache, block_list).transpose(1, 2)
         block_bias = block_bias.view(key.size(0), 1, 1, -1)
         if kv_heads != q_heads:
