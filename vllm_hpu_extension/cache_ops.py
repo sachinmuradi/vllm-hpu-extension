@@ -11,9 +11,13 @@ import habana_frameworks.torch as htorch
 import torch
 
 
-def insert_or_update_cache(input, cache, block_indices, block_offsets):
+def insert_or_update_cache(input, cache, block_indices, block_offsets, transpose=False):
     if block_offsets is None:
-        cache.index_copy_(0, block_indices, input)
+        if transpose:
+            # cache: (num_blocks, head_size, num_kv_heads, block_size)
+            cache.index_copy_(0, block_indices, input.permute(0, 3, 2, 1).contiguous())
+        else:
+            cache.index_copy_(0, block_indices, input)
     else:
         cache.index_put_((block_indices, block_offsets), input)
 
