@@ -160,7 +160,9 @@ def flat_pa(query, key, key_cache, value_cache, block_list, block_mapping, block
     q_heads = query.size(1)
     kv_heads = key_cache.size(2)
 
-    if is_custom_pa_enabled() and (not is_contiguous_pa):
+    if (is_custom_pa_enabled() or is_custom_pa_store_key()) and is_contiguous_pa:
+        raise NotImplementedError("Contiguous PA is not implemented for Custom kernels")
+    if is_custom_pa_enabled():
         # Here we should have key_cache transposed to (num_block, head_dim, num_heads, block_Size)
         use_separate_qk = os.environ.get('VLLM_CUSTOM_PA_SEPARATE_QK','false').lower() == 'true'
         if use_separate_qk:
@@ -175,7 +177,9 @@ def flat_pa(query, key, key_cache, value_cache, block_list, block_mapping, block
                 attn = torch.ops.hpu.custom_pa_v1_fwd(query, key_cache, value_cache, block_list, block_mapping, block_indices, block_offsets, scale)
             else:
                 print("NOT using 2 kernels approach")
-                attn = CustomPA.apply(query, key, key_cache, value_cache, block_list, block_mapping, block_indices, block_offsets, scale)
+                key_cache = key_cache.permute(0, 3, 2, 1).contiguous()
+                attn = torch.ops.hpu.custom_pa_v1_fwd(query, key_cache, value_cache, block_list, block_mapping, block_indices, block_offsets, scale)
+                key_cache = key_cache.permute(0, 3, 2, 1).contiguous()
     else:
         query = batch2block(scale * query, block_mapping).unsqueeze(-2)
         key = keys_fetch_func(key_cache, block_list).transpose(1, 2)

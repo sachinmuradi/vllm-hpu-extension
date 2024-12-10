@@ -56,14 +56,20 @@ class VLLMKVCache(torch.nn.Module):
         super(VLLMKVCache, self).__init__()
         self.use_contiguous_pa = os.environ.get('VLLM_CONTIGUOUS_PA',
                                                 'false').lower() == 'true'
+        self.transpose_key = os.environ.get('VLLM_CUSTOM_PA_STORE_KEY',
+                                                'false').lower() == 'true'
+        self.custom_pa = os.environ.get('VLLM_CUSTOM_PA',
+                                                'false').lower() == 'true'
 
-    def forward(self, input, cache, block_indices, block_offset, transpose=False):
-        insert_or_update_cache(input, cache, block_indices, block_offset, transpose)
+    def forward(self, input, cache, block_indices, block_offset):
+        insert_or_update_cache(input, cache, block_indices, block_offset, self.transpose_key)
         return cache
 
     def fetch_from_cache(self, cache, blocks):
         if self.use_contiguous_pa:
             return cache[:blocks.size(0)]
+        elif self.transpose_key and not self.custom_pa:
+            return cache.index_select(0, blocks).permute(0, 3, 2, 1).contiguous()
         else:
             return cache.index_select(0, blocks)
 
