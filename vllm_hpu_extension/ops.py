@@ -166,17 +166,14 @@ def flat_pa(query, key, key_cache, value_cache, block_list, block_mapping, block
         # Here we should have key_cache transposed to (num_block, head_dim, num_heads, block_Size)
         use_separate_qk = os.environ.get('VLLM_CUSTOM_PA_SEPARATE_QK','false').lower() == 'true'
         if use_separate_qk:
-            print("Using separate QK and AV kernels")
             attn_scores = torch.ops.hpu.custom_pa_qk_sfmx_fwd(query, key, key_cache, block_list, block_mapping, block_indices, block_offsets, scale)
             attn = torch.ops.hpu.custom_pa_av_fwd(attn_scores, value_cache, block_list, block_mapping, block_indices, block_offsets)
         else:
             if is_custom_pa_store_key():
                 # Key cache is updated in separate kernel
                 # calculate paged attn
-                print("Key stored spearately , now custom pa")
                 attn = torch.ops.hpu.custom_pa_v1_fwd(query, key_cache, value_cache, block_list, block_mapping, block_indices, block_offsets, scale)
             else:
-                print("NOT using 2 kernels approach")
                 key_cache = key_cache.permute(0, 3, 2, 1).contiguous()
                 attn = torch.ops.hpu.custom_pa_v1_fwd(query, key_cache, value_cache, block_list, block_mapping, block_indices, block_offsets, scale)
                 key_cache = key_cache.permute(0, 3, 2, 1).contiguous()
